@@ -42,12 +42,12 @@
 //
 //M*/
 
-#include "test_precomp.hpp"
+#include "../test_precomp.hpp"
 #include "opencv2/ts/ocl_test.hpp"
 
 #ifdef HAVE_OPENCL
 
-namespace cvtest {
+namespace opencv_test {
 namespace ocl {
 
 ////////////////////////////////////////////////////////////////////////////
@@ -90,14 +90,15 @@ PARAM_TEST_CASE(Gemm,
 
     void generateTestData()
     {
-        Size ARoiSize = randomSize(1, MAX_VALUE);
+        // set minimum size to 20, since testing less sizes doesn't make sense
+        Size ARoiSize = randomSize(20, MAX_VALUE);
         Border ABorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
         randomSubMat(A, A_roi, ARoiSize, ABorder, type, -11, 11);
 
         if (atrans)
             ARoiSize = Size(ARoiSize.height, ARoiSize.width);
 
-        Size BRoiSize = randomSize(1, MAX_VALUE);
+        Size BRoiSize = randomSize(20, MAX_VALUE);
         if (btrans)
             BRoiSize.width = ARoiSize.width;
         else
@@ -144,6 +145,6 @@ OCL_INSTANTIATE_TEST_CASE_P(Core, Gemm, ::testing::Combine(
                             testing::Values(CV_32FC1, CV_32FC2, CV_64FC1, CV_64FC2),
                             Bool(), Bool(), Bool(), Bool()));
 
-} } // namespace cvtest::ocl
+} } // namespace opencv_test::ocl
 
 #endif // HAVE_OPENCL

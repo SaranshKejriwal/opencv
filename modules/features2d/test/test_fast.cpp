@@ -42,8 +42,7 @@
 
 #include "test_precomp.hpp"
 
-using namespace std;
-using namespace cv;
+namespace opencv_test { namespace {
 
 class CV_FastTest : public cvtest::BaseTest
 {
@@ -119,8 +118,8 @@ void CV_FastTest::run( int )
     read( fs["exp_kps2"], exp_kps2, Mat() );
     fs.release();
 
-    if ( exp_kps1.size != kps1.size || 0 != norm(exp_kps1, kps1, NORM_L2) ||
-         exp_kps2.size != kps2.size || 0 != norm(exp_kps2, kps2, NORM_L2))
+     if ( exp_kps1.size != kps1.size || 0 != cvtest::norm(exp_kps1, kps1, NORM_L2) ||
+          exp_kps2.size != kps2.size || 0 != cvtest::norm(exp_kps2, kps2, NORM_L2))
     {
         ts->set_failed_test_info(cvtest::TS::FAIL_MISMATCH);
         return;
@@ -135,3 +134,5 @@ void CV_FastTest::run( int )
 }
 
 TEST(Features2d_FAST, regression) { CV_FastTest test; test.safe_run(); }
+
+}} // namespace

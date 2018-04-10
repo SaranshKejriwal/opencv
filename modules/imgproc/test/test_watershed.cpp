@@ -41,10 +41,8 @@
 //M*/
 
 #include "test_precomp.hpp"
-#include <string>
 
-using namespace cv;
-using namespace std;
+namespace opencv_test { namespace {
 
 class CV_WatershedTest : public cvtest::BaseTest
 {
@@ -85,7 +83,7 @@ void CV_WatershedTest::run( int /* start_from */)
 
         //expected image was added with 1 in order to save to png
         //so now we substract 1 to get real color
-        if(exp.data)
+        if(!exp.empty())
             colors.push_back(exp.ptr(p->y)[p->x] - 1);
     }
     fs.release();
@@ -107,7 +105,7 @@ void CV_WatershedTest::run( int /* start_from */)
                 continue; // bad result, doing nothing and going to get error latter;
 
             // repaint in saved color to compare with expected;
-            if(exp.data)
+            if(!exp.empty())
                 pixel = colors[pixel];
         }
     }
@@ -121,12 +119,9 @@ void CV_WatershedTest::run( int /* start_from */)
         exp = markers8U;
     }
 
-    if (0 != norm(markers8U, exp, NORM_INF))
-    {
-        ts->set_failed_test_info( cvtest::TS::FAIL_MISMATCH );
-        return;
-    }
-    ts->set_failed_test_info(cvtest::TS::OK);
+    ASSERT_EQ(0, cvtest::norm(markers8U, exp, NORM_INF));
 }
 
 TEST(Imgproc_Watershed, regression) { CV_WatershedTest test; test.safe_run(); }
+
+}} // namespace

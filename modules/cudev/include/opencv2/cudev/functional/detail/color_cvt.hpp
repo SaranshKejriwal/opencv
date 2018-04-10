@@ -43,8 +43,8 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_FUNCTIONAL_COLOR_CVT_DETAIL_HPP__
-#define __OPENCV_CUDEV_FUNCTIONAL_COLOR_CVT_DETAIL_HPP__
+#ifndef OPENCV_CUDEV_FUNCTIONAL_COLOR_CVT_DETAIL_HPP
+#define OPENCV_CUDEV_FUNCTIONAL_COLOR_CVT_DETAIL_HPP
 
 #include "../../common.hpp"
 #include "../../util/vec_traits.hpp"
@@ -156,7 +156,7 @@ namespace color_cvt_detail
             const int g = src.y;
             const int r = bidx == 0 ? src.z : src.x;
             const int a = src.w;
-            return (ushort) ((b >> 3) | ((g & ~7) << 2) | ((r & ~7) << 7) | (a * 0x8000));
+            return (ushort) ((b >> 3) | ((g & ~7) << 2) | ((r & ~7) << 7) | (a ? 0x8000 : 0));
         }
     };
 
@@ -263,7 +263,8 @@ namespace color_cvt_detail
     {
         __device__ ushort operator ()(uchar src) const
         {
-            return (ushort) (src | (src << 5) | (src << 10));
+            const int t = src >> 3;
+            return (ushort)(t | (t << 5) | (t << 10));
         }
     };
 
@@ -272,7 +273,8 @@ namespace color_cvt_detail
     {
         __device__ ushort operator ()(uchar src) const
         {
-            return (ushort) ((src >> 3) | ((src & ~3) << 3) | ((src & ~7) << 8));
+            const int t = src;
+            return (ushort)((t >> 3) | ((t & ~3) << 3) | ((t & ~7) << 8));
         }
     };
 
@@ -340,15 +342,15 @@ namespace color_cvt_detail
 
             const int delta = ColorChannel<T>::half() * (1 << yuv_shift);
 
-            const int Y = CV_CUDEV_DESCALE(b * c_RGB2YUVCoeffs_i[2] + g * c_RGB2YUVCoeffs_i[1] + r * c_RGB2YUVCoeffs_i[0], yuv_shift);
-            const int Cr = CV_CUDEV_DESCALE((r - Y) * c_RGB2YUVCoeffs_i[3] + delta, yuv_shift);
-            const int Cb = CV_CUDEV_DESCALE((b - Y) * c_RGB2YUVCoeffs_i[4] + delta, yuv_shift);
+            const int Y = CV_CUDEV_DESCALE(b * c_RGB2YUVCoeffs_i[0] + g * c_RGB2YUVCoeffs_i[1] + r * c_RGB2YUVCoeffs_i[2], yuv_shift);
+            const int Cb = CV_CUDEV_DESCALE((b - Y) * c_RGB2YUVCoeffs_i[3] + delta, yuv_shift);
+            const int Cr = CV_CUDEV_DESCALE((r - Y) * c_RGB2YUVCoeffs_i[4] + delta, yuv_shift);
 
             typename MakeVec<T, dcn>::type dst;
 
             dst.x = saturate_cast<T>(Y);
-            dst.y = saturate_cast<T>(Cr);
-            dst.z = saturate_cast<T>(Cb);
+            dst.y = saturate_cast<T>(Cb);
+            dst.z = saturate_cast<T>(Cr);
 
             return dst;
         }
@@ -365,9 +367,9 @@ namespace color_cvt_detail
 
             typename MakeVec<float, dcn>::type dst;
 
-            dst.x = b * c_RGB2YUVCoeffs_f[2] + g * c_RGB2YUVCoeffs_f[1] + r * c_RGB2YUVCoeffs_f[0];
-            dst.y = (r - dst.x) * c_RGB2YUVCoeffs_f[3] + ColorChannel<float>::half();
-            dst.z = (b - dst.x) * c_RGB2YUVCoeffs_f[4] + ColorChannel<float>::half();
+            dst.x = b * c_RGB2YUVCoeffs_f[0] + g * c_RGB2YUVCoeffs_f[1] + r * c_RGB2YUVCoeffs_f[2];
+            dst.y = (b - dst.x) * c_RGB2YUVCoeffs_f[3] + ColorChannel<float>::half();
+            dst.z = (r - dst.x) * c_RGB2YUVCoeffs_f[4] + ColorChannel<float>::half();
 
             return dst;
         }
@@ -383,9 +385,9 @@ namespace color_cvt_detail
     {
         __device__ typename MakeVec<T, dcn>::type operator ()(const typename MakeVec<T, scn>::type& src) const
         {
-            const int b = src.x + CV_CUDEV_DESCALE((src.z - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[3], yuv_shift);
+            const int r = src.x + CV_CUDEV_DESCALE((src.z - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[3], yuv_shift);
             const int g = src.x + CV_CUDEV_DESCALE((src.z - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[2] + (src.y - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[1], yuv_shift);
-            const int r = src.x + CV_CUDEV_DESCALE((src.y - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[0], yuv_shift);
+            const int b = src.x + CV_CUDEV_DESCALE((src.y - ColorChannel<T>::half()) * c_YUV2RGBCoeffs_i[0], yuv_shift);
 
             typename MakeVec<T, dcn>::type dst;
 
@@ -403,9 +405,9 @@ namespace color_cvt_detail
     {
         __device__ typename MakeVec<float, dcn>::type operator ()(const typename MakeVec<float, scn>::type& src) const
         {
-            const float b = src.x + (src.z - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[3];
+            const float r = src.x + (src.z - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[3];
             const float g = src.x + (src.z - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[2] + (src.y - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[1];
-            const float r = src.x + (src.y - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[0];
+            const float b = src.x + (src.y - ColorChannel<float>::half()) * c_YUV2RGBCoeffs_f[0];
 
             typename MakeVec<float, dcn>::type dst;
 
@@ -797,8 +799,7 @@ namespace color_cvt_detail
 
             if (diff > numeric_limits<float>::epsilon())
             {
-                s = (l < 0.5f) * diff / (vmax + vmin);
-                s += (l >= 0.5f) * diff / (2.0f - vmax - vmin);
+                s = l < 0.5f ? diff / (vmax + vmin) : diff / (2 - vmax - vmin);
 
                 diff = 60.f / diff;
 
@@ -1190,7 +1191,7 @@ namespace color_cvt_detail
 
             dst.x = saturate_cast<uchar>(buf.x * 2.55f);
             dst.y = saturate_cast<uchar>(buf.y * 0.72033898305084743f + 96.525423728813564f);
-            dst.z = saturate_cast<uchar>(buf.z * 0.99609375f + 139.453125f);
+            dst.z = saturate_cast<uchar>(buf.z * 0.9732824427480916f + 136.259541984732824f);
 
             return dst;
         }
@@ -1228,6 +1229,10 @@ namespace color_cvt_detail
             float G = -0.969256f * X + 1.875991f * Y + 0.041556f * Z;
             float R = 3.240479f * X - 1.537150f * Y - 0.498535f * Z;
 
+            R = ::fminf(::fmaxf(R, 0.f), 1.f);
+            G = ::fminf(::fmaxf(G, 0.f), 1.f);
+            B = ::fminf(::fmaxf(B, 0.f), 1.f);
+
             if (srgb)
             {
                 B = splineInterpolate(B * GAMMA_TAB_SIZE, c_sRGBInvGammaTab, GAMMA_TAB_SIZE);
@@ -1255,7 +1260,7 @@ namespace color_cvt_detail
 
             buf.x = src.x * (100.f / 255.f);
             buf.y = src.y * 1.388235294117647f - 134.f;
-            buf.z = src.z * 1.003921568627451f - 140.f;
+            buf.z = src.z * 1.027450980392157f - 140.f;
 
             Luv2RGB<float, 3, 3, srgb, blueIdx> cvtf;
             buf = cvtf(buf);

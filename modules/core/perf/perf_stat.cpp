@@ -1,10 +1,8 @@
 #include "perf_precomp.hpp"
 
-using namespace std;
-using namespace cv;
+namespace opencv_test
+{
 using namespace perf;
-using std::tr1::make_tuple;
-using std::tr1::get;
 
 PERF_TEST_P(Size_MatType, sum, TYPICAL_MATS)
 {
@@ -65,8 +63,8 @@ PERF_TEST_P(Size_MatType, meanStdDev, TYPICAL_MATS)
 
     TEST_CYCLE() meanStdDev(src, mean, dev);
 
-    SANITY_CHECK(mean, 1e-6);
-    SANITY_CHECK(dev, 1e-6);
+    SANITY_CHECK(mean, 1e-5, ERROR_RELATIVE);
+    SANITY_CHECK(dev, 1e-5, ERROR_RELATIVE);
 }
 
 PERF_TEST_P(Size_MatType, meanStdDev_mask, TYPICAL_MATS)
@@ -102,3 +100,5 @@ PERF_TEST_P(Size_MatType, countNonZero, testing::Combine( testing::Values( TYPIC
 
     SANITY_CHECK(cnt);
 }
+
+} // namespace

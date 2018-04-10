@@ -42,14 +42,19 @@
 
 #include "precomp.hpp"
 
+#include "opencv2/core/opencl/ocl_defs.hpp"
+
 using namespace cv;
 using namespace cv::detail;
 using namespace cv::cuda;
 
-#ifdef HAVE_OPENCV_NONFREE
-#include "opencv2/nonfree.hpp"
+#ifdef HAVE_OPENCV_XFEATURES2D
+#include "opencv2/xfeatures2d.hpp"
+using xfeatures2d::SURF;
+#endif
 
-static bool makeUseOfNonfree = initModule_nonfree();
+#ifdef HAVE_OPENCV_CUDAIMGPROC
+#  include "opencv2/cudaimgproc.hpp"
 #endif
 
 namespace {
@@ -69,11 +74,14 @@ struct MatchPairsBody : ParallelLoopBody
             : matcher(_matcher), features(_features),
               pairwise_matches(_pairwise_matches), near_pairs(_near_pairs) {}
 
-    void operator ()(const Range &r) const
+    void operator ()(const Range &r) const CV_OVERRIDE
     {
+        cv::RNG rng = cv::theRNG(); // save entry rng state
         const int num_images = static_cast<int>(features.size());
         for (int i = r.start; i < r.end; ++i)
         {
+            cv::theRNG() = cv::RNG(rng.state + i); // force "stable" RNG seed for each processed pair
+
             int from = near_pairs[i].first;
             int to = near_pairs[i].second;
             int pair_idx = from*num_images + to;
@@ -108,6 +116,35 @@ private:
 };
 
 
+struct FindFeaturesBody : ParallelLoopBody
+{
+    FindFeaturesBody(FeaturesFinder &finder, InputArrayOfArrays images,
+                     std::vector<ImageFeatures> &features, const std::vector<std::vector<cv::Rect> > *rois)
+            : finder_(finder), images_(images), features_(features), rois_(rois) {}
+
+    void operator ()(const Range &r) const CV_OVERRIDE
+    {
+        for (int i = r.start; i < r.end; ++i)
+        {
+            Mat image = images_.getMat(i);
+            if (rois_)
+                finder_(image, features_[i], (*rois_)[i]);
+            else
+                finder_(image, features_[i]);
+        }
+    }
+
+private:
+    FeaturesFinder &finder_;
+    InputArrayOfArrays images_;
+    std::vector<ImageFeatures> &features_;
+    const std::vector<std::vector<cv::Rect> > *rois_;
+
+    // to cease visual studio warning
+    void operator =(const FindFeaturesBody&);
+};
+
+
 //////////////////////////////////////////////////////////////////////////////
 
 typedef std::set<std::pair<int,int> > MatchesSet;
@@ -115,18 +152,18 @@ typedef std::set<std::pair<int,int> > MatchesSet;
 // These two classes are aimed to find features matches only, not to
 // estimate homography
 
-class CpuMatcher : public FeaturesMatcher
+class CpuMatcher CV_FINAL : public FeaturesMatcher
 {
 public:
     CpuMatcher(float match_conf) : FeaturesMatcher(true), match_conf_(match_conf) {}
-    void match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info);
+    void match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info) CV_OVERRIDE;
 
 private:
     float match_conf_;
 };
 
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
-class GpuMatcher : public FeaturesMatcher
+class GpuMatcher CV_FINAL : public FeaturesMatcher
 {
 public:
     GpuMatcher(float match_conf) : match_conf_(match_conf) {}
@@ -145,31 +182,43 @@ private:
 
 void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info)
 {
+    CV_INSTRUMENT_REGION()
+
     CV_Assert(features1.descriptors.type() == features2.descriptors.type());
     CV_Assert(features2.descriptors.depth() == CV_8U || features2.descriptors.depth() == CV_32F);
 
 #ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::match2nearest(features1, features2, matches_info, match_conf_))
+    if (tegra::useTegra() && tegra::match2nearest(features1, features2, matches_info, match_conf_))
         return;
 #endif
 
     matches_info.matches.clear();
 
-    Ptr<flann::IndexParams> indexParams = makePtr<flann::KDTreeIndexParams>();
-    Ptr<flann::SearchParams> searchParams = makePtr<flann::SearchParams>();
-
-    if (features2.descriptors.depth() == CV_8U)
+    Ptr<cv::DescriptorMatcher> matcher;
+#if 0 // TODO check this
+    if (ocl::isOpenCLActivated())
     {
-        indexParams->setAlgorithm(cvflann::FLANN_INDEX_LSH);
-        searchParams->setAlgorithm(cvflann::FLANN_INDEX_LSH);
+        matcher = makePtr<BFMatcher>((int)NORM_L2);
     }
+    else
+#endif
+    {
+        Ptr<flann::IndexParams> indexParams = makePtr<flann::KDTreeIndexParams>();
+        Ptr<flann::SearchParams> searchParams = makePtr<flann::SearchParams>();
 
-    FlannBasedMatcher matcher(indexParams, searchParams);
+        if (features2.descriptors.depth() == CV_8U)
+        {
+            indexParams->setAlgorithm(cvflann::FLANN_INDEX_LSH);
+            searchParams->setAlgorithm(cvflann::FLANN_INDEX_LSH);
+        }
+
+        matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
+    }
     std::vector< std::vector<DMatch> > pair_matches;
     MatchesSet matches;
 
     // Find 1->2 matches
-    matcher.knnMatch(features1.descriptors, features2.descriptors, pair_matches, 2);
+    matcher->knnMatch(features1.descriptors, features2.descriptors, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)
@@ -186,7 +235,7 @@ void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
 
     // Find 2->1 matches
     pair_matches.clear();
-    matcher.knnMatch(features2.descriptors, features1.descriptors, pair_matches, 2);
+    matcher->knnMatch(features2.descriptors, features1.descriptors, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)
@@ -203,6 +252,8 @@ void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
 void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2, MatchesInfo& matches_info)
 {
+    CV_INSTRUMENT_REGION()
+
     matches_info.matches.clear();
 
     ensureSizeIsEnough(features1.descriptors.size(), features1.descriptors.type(), descriptors1_);
@@ -211,13 +262,17 @@ void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
     descriptors1_.upload(features1.descriptors);
     descriptors2_.upload(features2.descriptors);
 
-    BFMatcher_CUDA matcher(NORM_L2);
+    //TODO: NORM_L1 allows to avoid matcher crashes for ORB features, but is not absolutely correct for them.
+    //      The best choice for ORB features is NORM_HAMMING, but it is incorrect for SURF features.
+    //      More accurate fix in this place should be done in the future -- the type of the norm
+    //      should be either a parameter of this method, or a field of the class.
+    Ptr<cuda::DescriptorMatcher> matcher = cuda::DescriptorMatcher::createBFMatcher(NORM_L1);
+
     MatchesSet matches;
 
     // Find 1->2 matches
     pair_matches.clear();
-    matcher.knnMatchSingle(descriptors1_, descriptors2_, train_idx_, distance_, all_dist_, 2);
-    matcher.knnMatchDownload(train_idx_, distance_, pair_matches);
+    matcher->knnMatch(descriptors1_, descriptors2_, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)
@@ -233,8 +288,7 @@ void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
 
     // Find 2->1 matches
     pair_matches.clear();
-    matcher.knnMatchSingle(descriptors2_, descriptors1_, train_idx_, distance_, all_dist_, 2);
-    matcher.knnMatchDownload(train_idx_, distance_, pair_matches);
+    matcher->knnMatch(descriptors2_, descriptors1_, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)
@@ -264,14 +318,14 @@ void GpuMatcher::collectGarbage()
 namespace cv {
 namespace detail {
 
-void FeaturesFinder::operator ()(const Mat &image, ImageFeatures &features)
+void FeaturesFinder::operator ()(InputArray  image, ImageFeatures &features)
 {
     find(image, features);
     features.img_size = image.size();
 }
 
 
-void FeaturesFinder::operator ()(const Mat &image, ImageFeatures &features, const std::vector<Rect> &rois)
+void FeaturesFinder::operator ()(InputArray image, ImageFeatures &features, const std::vector<Rect> &rois)
 {
     std::vector<ImageFeatures> roi_features(rois.size());
     size_t total_kps_count = 0;
@@ -279,7 +333,7 @@ void FeaturesFinder::operator ()(const Mat &image, ImageFeatures &features, cons
 
     for (size_t i = 0; i < rois.size(); ++i)
     {
-        find(image(rois[i]), roi_features[i]);
+        find(image.getUMat()(rois[i]), roi_features[i]);
         total_kps_count += roi_features[i].keypoints.size();
         total_descriptors_height += roi_features[i].descriptors.rows;
     }
@@ -300,7 +354,7 @@ void FeaturesFinder::operator ()(const Mat &image, ImageFeatures &features, cons
             features.keypoints[kp_idx].pt.x += (float)rois[i].x;
             features.keypoints[kp_idx].pt.y += (float)rois[i].y;
         }
-        Mat subdescr = features.descriptors.rowRange(
+        UMat subdescr = features.descriptors.rowRange(
                 descr_offset, descr_offset + roi_features[i].descriptors.rows);
         roi_features[i].descriptors.copyTo(subdescr);
         descr_offset += roi_features[i].descriptors.rows;
@@ -308,38 +362,102 @@ void FeaturesFinder::operator ()(const Mat &image, ImageFeatures &features, cons
 }
 
 
-SurfFeaturesFinder::SurfFeaturesFinder(double hess_thresh, int num_octaves, int num_layers,
-                                       int num_octaves_descr, int num_layers_descr)
+void FeaturesFinder::operator ()(InputArrayOfArrays images, std::vector<ImageFeatures> &features)
 {
-    if (num_octaves_descr == num_octaves && num_layers_descr == num_layers)
+    size_t count = images.total();
+    features.resize(count);
+
+    FindFeaturesBody body(*this, images, features, NULL);
+    if (isThreadSafe())
+        parallel_for_(Range(0, static_cast<int>(count)), body);
+    else
+        body(Range(0, static_cast<int>(count)));
+}
+
+
+void FeaturesFinder::operator ()(InputArrayOfArrays images, std::vector<ImageFeatures> &features,
+                                  const std::vector<std::vector<cv::Rect> > &rois)
+{
+    CV_Assert(rois.size() == images.total());
+    size_t count = images.total();
+    features.resize(count);
+
+    FindFeaturesBody body(*this, images, features, &rois);
+    if (isThreadSafe())
+        parallel_for_(Range(0, static_cast<int>(count)), body);
+    else
+        body(Range(0, static_cast<int>(count)));
+}
+
+
+bool FeaturesFinder::isThreadSafe() const
+{
+#ifdef HAVE_OPENCL
+    if (ocl::isOpenCLActivated())
     {
-        surf = Algorithm::create<Feature2D>("Feature2D.SURF");
-        if( !surf )
-            CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
-        surf->set("hessianThreshold", hess_thresh);
-        surf->set("nOctaves", num_octaves);
-        surf->set("nOctaveLayers", num_layers);
+        return false;
+    }
+#endif
+    if (dynamic_cast<const SurfFeaturesFinder*>(this))
+    {
+        return true;
+    }
+    else if (dynamic_cast<const OrbFeaturesFinder*>(this))
+    {
+        return true;
     }
     else
     {
-        detector_ = Algorithm::create<FeatureDetector>("Feature2D.SURF");
-        extractor_ = Algorithm::create<DescriptorExtractor>("Feature2D.SURF");
-
-        if( !detector_ || !extractor_ )
-            CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
-
-        detector_->set("hessianThreshold", hess_thresh);
-        detector_->set("nOctaves", num_octaves);
-        detector_->set("nOctaveLayers", num_layers);
-
-        extractor_->set("nOctaves", num_octaves_descr);
-        extractor_->set("nOctaveLayers", num_layers_descr);
+        return false;
     }
 }
 
-void SurfFeaturesFinder::find(const Mat &image, ImageFeatures &features)
+
+SurfFeaturesFinder::SurfFeaturesFinder(double hess_thresh, int num_octaves, int num_layers,
+                                       int num_octaves_descr, int num_layers_descr)
 {
-    Mat gray_image;
+#ifdef HAVE_OPENCV_XFEATURES2D
+    if (num_octaves_descr == num_octaves && num_layers_descr == num_layers)
+    {
+        Ptr<SURF> surf_ = SURF::create();
+        if( !surf_ )
+            CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
+        surf_->setHessianThreshold(hess_thresh);
+        surf_->setNOctaves(num_octaves);
+        surf_->setNOctaveLayers(num_layers);
+        surf = surf_;
+    }
+    else
+    {
+        Ptr<SURF> sdetector_ = SURF::create();
+        Ptr<SURF> sextractor_ = SURF::create();
+
+        if( !sdetector_ || !sextractor_ )
+            CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
+
+        sdetector_->setHessianThreshold(hess_thresh);
+        sdetector_->setNOctaves(num_octaves);
+        sdetector_->setNOctaveLayers(num_layers);
+
+        sextractor_->setNOctaves(num_octaves_descr);
+        sextractor_->setNOctaveLayers(num_layers_descr);
+
+        detector_ = sdetector_;
+        extractor_ = sextractor_;
+    }
+#else
+    (void)hess_thresh;
+    (void)num_octaves;
+    (void)num_layers;
+    (void)num_octaves_descr;
+    (void)num_layers_descr;
+    CV_Error( Error::StsNotImplemented, "OpenCV was built without SURF support" );
+#endif
+}
+
+void SurfFeaturesFinder::find(InputArray image, ImageFeatures &features)
+{
+    UMat gray_image;
     CV_Assert((image.type() == CV_8UC3) || (image.type() == CV_8UC1));
     if(image.type() == CV_8UC3)
     {
@@ -347,7 +465,7 @@ void SurfFeaturesFinder::find(const Mat &image, ImageFeatures &features)
     }
     else
     {
-        gray_image = image;
+        gray_image = image.getUMat();
     }
     if (!surf)
     {
@@ -356,8 +474,8 @@ void SurfFeaturesFinder::find(const Mat &image, ImageFeatures &features)
     }
     else
     {
-        Mat descriptors;
-        (*surf)(gray_image, Mat(), features.keypoints, descriptors);
+        UMat descriptors;
+        surf->detectAndCompute(gray_image, Mat(), features.keypoints, descriptors);
         features.descriptors = descriptors.reshape(1, (int)features.keypoints.size());
     }
 }
@@ -365,12 +483,12 @@ void SurfFeaturesFinder::find(const Mat &image, ImageFeatures &features)
 OrbFeaturesFinder::OrbFeaturesFinder(Size _grid_size, int n_features, float scaleFactor, int nlevels)
 {
     grid_size = _grid_size;
-    orb = makePtr<ORB>(n_features * (99 + grid_size.area())/100/grid_size.area(), scaleFactor, nlevels);
+    orb = ORB::create(n_features * (99 + grid_size.area())/100/grid_size.area(), scaleFactor, nlevels);
 }
 
-void OrbFeaturesFinder::find(const Mat &image, ImageFeatures &features)
+void OrbFeaturesFinder::find(InputArray image, ImageFeatures &features)
 {
-    Mat gray_image;
+    UMat gray_image;
 
     CV_Assert((image.type() == CV_8UC3) || (image.type() == CV_8UC4) || (image.type() == CV_8UC1));
 
@@ -379,20 +497,21 @@ void OrbFeaturesFinder::find(const Mat &image, ImageFeatures &features)
     } else if (image.type() == CV_8UC4) {
         cvtColor(image, gray_image, COLOR_BGRA2GRAY);
     } else if (image.type() == CV_8UC1) {
-        gray_image=image;
+        gray_image = image.getUMat();
     } else {
         CV_Error(Error::StsUnsupportedFormat, "");
     }
 
     if (grid_size.area() == 1)
-        (*orb)(gray_image, Mat(), features.keypoints, features.descriptors);
+        orb->detectAndCompute(gray_image, Mat(), features.keypoints, features.descriptors);
     else
     {
         features.keypoints.clear();
         features.descriptors.release();
 
         std::vector<KeyPoint> points;
-        Mat descriptors;
+        Mat _descriptors;
+        UMat descriptors;
 
         for (int r = 0; r < grid_size.height; ++r)
             for (int c = 0; c < grid_size.width; ++c)
@@ -408,13 +527,13 @@ void OrbFeaturesFinder::find(const Mat &image, ImageFeatures &features)
                 //     << " xl=" << xl << ", xr=" << xr << ", gray_image.data=" << ((size_t)gray_image.data) << ", "
                 //     << "gray_image.dims=" << gray_image.dims << "\n");
 
-                Mat gray_image_part=gray_image(Range(yl, yr), Range(xl, xr));
+                UMat gray_image_part=gray_image(Range(yl, yr), Range(xl, xr));
                 // LOGLN("OrbFeaturesFinder::find: gray_image_part.empty=" << (gray_image_part.empty()?"true":"false") << ", "
                 //     << " gray_image_part.size()=(" << gray_image_part.size().width << "x" << gray_image_part.size().height << "), "
                 //     << " gray_image_part.dims=" << gray_image_part.dims << ", "
                 //     << " gray_image_part.data=" << ((size_t)gray_image_part.data) << "\n");
 
-                (*orb)(gray_image_part, Mat(), points, descriptors);
+                orb->detectAndCompute(gray_image_part, UMat(), points, descriptors);
 
                 features.keypoints.reserve(features.keypoints.size() + points.size());
                 for (std::vector<KeyPoint>::iterator kp = points.begin(); kp != points.end(); ++kp)
@@ -423,12 +542,34 @@ void OrbFeaturesFinder::find(const Mat &image, ImageFeatures &features)
                     kp->pt.y += yl;
                     features.keypoints.push_back(*kp);
                 }
-                features.descriptors.push_back(descriptors);
+                _descriptors.push_back(descriptors.getMat(ACCESS_READ));
             }
+
+        // TODO optimize copyTo()
+        //features.descriptors = _descriptors.getUMat(ACCESS_READ);
+        _descriptors.copyTo(features.descriptors);
     }
 }
 
-#ifdef HAVE_OPENCV_NONFREE
+AKAZEFeaturesFinder::AKAZEFeaturesFinder(int descriptor_type,
+                                         int descriptor_size,
+                                         int descriptor_channels,
+                                         float threshold,
+                                         int nOctaves,
+                                         int nOctaveLayers,
+                                         int diffusivity)
+{
+    akaze = AKAZE::create(descriptor_type, descriptor_size, descriptor_channels,
+                          threshold, nOctaves, nOctaveLayers, diffusivity);
+}
+
+void AKAZEFeaturesFinder::find(InputArray image, detail::ImageFeatures &features)
+{
+    CV_Assert((image.type() == CV_8UC3) || (image.type() == CV_8UC1));
+    akaze->detectAndCompute(image, noArray(), features.keypoints, features.descriptors);
+}
+
+#ifdef HAVE_OPENCV_XFEATURES2D
 SurfFeaturesFinderGpu::SurfFeaturesFinderGpu(double hess_thresh, int num_octaves, int num_layers,
                                              int num_octaves_descr, int num_layers_descr)
 {
@@ -442,7 +583,7 @@ SurfFeaturesFinderGpu::SurfFeaturesFinderGpu(double hess_thresh, int num_octaves
 }
 
 
-void SurfFeaturesFinderGpu::find(const Mat &image, ImageFeatures &features)
+void SurfFeaturesFinderGpu::find(InputArray image, ImageFeatures &features)
 {
     CV_Assert(image.depth() == CV_8U);
 
@@ -450,7 +591,12 @@ void SurfFeaturesFinderGpu::find(const Mat &image, ImageFeatures &features)
     image_.upload(image);
 
     ensureSizeIsEnough(image.size(), CV_8UC1, gray_image_);
+
+#ifdef HAVE_OPENCV_CUDAIMGPROC
+    cv::cuda::cvtColor(image_, gray_image_, COLOR_BGR2GRAY);
+#else
     cvtColor(image_, gray_image_, COLOR_BGR2GRAY);
+#endif
 
     surf_.nOctaves = num_octaves_;
     surf_.nOctaveLayers = num_layers_;
@@ -483,7 +629,7 @@ MatchesInfo::MatchesInfo() : src_img_idx(-1), dst_img_idx(-1), num_inliers(0), c
 
 MatchesInfo::MatchesInfo(const MatchesInfo &other) { *this = other; }
 
-const MatchesInfo& MatchesInfo::operator =(const MatchesInfo &other)
+MatchesInfo& MatchesInfo::operator =(const MatchesInfo &other)
 {
     src_img_idx = other.src_img_idx;
     dst_img_idx = other.dst_img_idx;
@@ -499,12 +645,12 @@ const MatchesInfo& MatchesInfo::operator =(const MatchesInfo &other)
 //////////////////////////////////////////////////////////////////////////////
 
 void FeaturesMatcher::operator ()(const std::vector<ImageFeatures> &features, std::vector<MatchesInfo> &pairwise_matches,
-                                  const Mat &mask)
+                                  const UMat &mask)
 {
     const int num_images = static_cast<int>(features.size());
 
     CV_Assert(mask.empty() || (mask.type() == CV_8U && mask.cols == num_images && mask.rows));
-    Mat_<uchar> mask_(mask);
+    Mat_<uchar> mask_(mask.getMat(ACCESS_READ));
     if (mask_.empty())
         mask_ = Mat::ones(num_images, num_images, CV_8U);
 
@@ -551,6 +697,8 @@ BestOf2NearestMatcher::BestOf2NearestMatcher(bool try_use_gpu, float match_conf,
 void BestOf2NearestMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2,
                                   MatchesInfo &matches_info)
 {
+    CV_INSTRUMENT_REGION()
+
     (*impl_)(features1, features2, matches_info);
 
     // Check if it makes sense to find homography
@@ -630,6 +778,92 @@ void BestOf2NearestMatcher::collectGarbage()
 {
     impl_->collectGarbage();
 }
+
+
+BestOf2NearestRangeMatcher::BestOf2NearestRangeMatcher(int range_width, bool try_use_gpu, float match_conf, int num_matches_thresh1, int num_matches_thresh2): BestOf2NearestMatcher(try_use_gpu, match_conf, num_matches_thresh1, num_matches_thresh2)
+{
+    range_width_ = range_width;
+}
+
+
+void BestOf2NearestRangeMatcher::operator ()(const std::vector<ImageFeatures> &features, std::vector<MatchesInfo> &pairwise_matches,
+                                  const UMat &mask)
+{
+    const int num_images = static_cast<int>(features.size());
+
+    CV_Assert(mask.empty() || (mask.type() == CV_8U && mask.cols == num_images && mask.rows));
+    Mat_<uchar> mask_(mask.getMat(ACCESS_READ));
+    if (mask_.empty())
+        mask_ = Mat::ones(num_images, num_images, CV_8U);
+
+    std::vector<std::pair<int,int> > near_pairs;
+    for (int i = 0; i < num_images - 1; ++i)
+        for (int j = i + 1; j < std::min(num_images, i + range_width_); ++j)
+            if (features[i].keypoints.size() > 0 && features[j].keypoints.size() > 0 && mask_(i, j))
+                near_pairs.push_back(std::make_pair(i, j));
+
+    pairwise_matches.resize(num_images * num_images);
+    MatchPairsBody body(*this, features, pairwise_matches, near_pairs);
+
+    if (is_thread_safe_)
+        parallel_for_(Range(0, static_cast<int>(near_pairs.size())), body);
+    else
+        body(Range(0, static_cast<int>(near_pairs.size())));
+    LOGLN_CHAT("");
+}
+
+
+void AffineBestOf2NearestMatcher::match(const ImageFeatures &features1, const ImageFeatures &features2,
+                                        MatchesInfo &matches_info)
+{
+    (*impl_)(features1, features2, matches_info);
+
+    // Check if it makes sense to find transform
+    if (matches_info.matches.size() < static_cast<size_t>(num_matches_thresh1_))
+        return;
+
+    // Construct point-point correspondences for transform estimation
+    Mat src_points(1, static_cast<int>(matches_info.matches.size()), CV_32FC2);
+    Mat dst_points(1, static_cast<int>(matches_info.matches.size()), CV_32FC2);
+    for (size_t i = 0; i < matches_info.matches.size(); ++i)
+    {
+        const cv::DMatch &m = matches_info.matches[i];
+        src_points.at<Point2f>(0, static_cast<int>(i)) = features1.keypoints[m.queryIdx].pt;
+        dst_points.at<Point2f>(0, static_cast<int>(i)) = features2.keypoints[m.trainIdx].pt;
+    }
+
+    // Find pair-wise motion
+    if (full_affine_)
+        matches_info.H = estimateAffine2D(src_points, dst_points, matches_info.inliers_mask);
+    else
+        matches_info.H = estimateAffinePartial2D(src_points, dst_points, matches_info.inliers_mask);
+
+    if (matches_info.H.empty()) {
+        // could not find transformation
+        matches_info.confidence = 0;
+        matches_info.num_inliers = 0;
+        return;
+    }
+
+    // Find number of inliers
+    matches_info.num_inliers = 0;
+    for (size_t i = 0; i < matches_info.inliers_mask.size(); ++i)
+        if (matches_info.inliers_mask[i])
+            matches_info.num_inliers++;
+
+    // These coeffs are from paper M. Brown and D. Lowe. "Automatic Panoramic
+    // Image Stitching using Invariant Features"
+    matches_info.confidence =
+        matches_info.num_inliers / (8 + 0.3 * matches_info.matches.size());
+
+    /* should we remove matches between too close images? */
+    // matches_info.confidence = matches_info.confidence > 3. ? 0. : matches_info.confidence;
+
+    // extend H to represent linear transformation in homogeneous coordinates
+    matches_info.H.push_back(Mat::zeros(1, 3, CV_64F));
+    matches_info.H.at<double>(2, 2) = 1;
+}
+
 
 } // namespace detail
 } // namespace cv

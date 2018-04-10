@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_OLD_CV_H__
-#define __OPENCV_OLD_CV_H__
+#ifndef OPENCV_OLD_CV_H
+#define OPENCV_OLD_CV_H
 
 #if defined(_MSC_VER)
     #define CV_DO_PRAGMA(x) __pragma(x)
@@ -65,8 +65,6 @@
 #include "opencv2/photo/photo_c.h"
 #include "opencv2/video/tracking_c.h"
 #include "opencv2/objdetect/objdetect_c.h"
-#include "opencv2/legacy.hpp"
-#include "opencv2/legacy/compat.hpp"
 
 #if !defined(CV_IMPL)
 #define CV_IMPL extern "C"

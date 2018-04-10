@@ -5,12 +5,12 @@
 // Copyright (C) 2014, Advanced Micro Devices, Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 
-#include "test_precomp.hpp"
+#include "../test_precomp.hpp"
 #include "opencv2/ts/ocl_test.hpp"
 
 #ifdef HAVE_OPENCL
 
-namespace cvtest {
+namespace opencv_test {
 namespace ocl {
 
 //////////////////////////////// UMat Expressions /////////////////////////////////////////////////
@@ -80,6 +80,6 @@ OCL_TEST_P(UMatExpr, Ones)
 
 OCL_INSTANTIATE_TEST_CASE_P(MatrixOperation, UMatExpr, Combine(OCL_ALL_DEPTHS, OCL_ALL_CHANNELS));
 
-} } // namespace cvtest::ocl
+} } // namespace opencv_test::ocl
 
 #endif

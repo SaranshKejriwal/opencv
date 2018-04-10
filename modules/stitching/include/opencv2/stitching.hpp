@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_STITCHING_STITCHER_HPP__
-#define __OPENCV_STITCHING_STITCHER_HPP__
+#ifndef OPENCV_STITCHING_STITCHER_HPP
+#define OPENCV_STITCHING_STITCHER_HPP
 
 #include "opencv2/core.hpp"
 #include "opencv2/features2d.hpp"
@@ -53,9 +53,75 @@
 #include "opencv2/stitching/detail/blenders.hpp"
 #include "opencv2/stitching/detail/camera.hpp"
 
+
+#if defined(Status)
+#  warning Detected X11 'Status' macro definition, it can cause build conflicts. Please, include this header before any X11 headers.
+#endif
+
+
+/**
+@defgroup stitching Images stitching
+
+This figure illustrates the stitching module pipeline implemented in the Stitcher class. Using that
+class it's possible to configure/remove some steps, i.e. adjust the stitching pipeline according to
+the particular needs. All building blocks from the pipeline are available in the detail namespace,
+one can combine and use them separately.
+
+The implemented stitching pipeline is very similar to the one proposed in @cite BL07 .
+
+![stitching pipeline](StitchingPipeline.jpg)
+
+Camera models
+-------------
+
+There are currently 2 camera models implemented in stitching pipeline.
+
+- _Homography model_ expecting perspective transformations between images
+  implemented in @ref cv::detail::BestOf2NearestMatcher cv::detail::HomographyBasedEstimator
+  cv::detail::BundleAdjusterReproj cv::detail::BundleAdjusterRay
+- _Affine model_ expecting affine transformation with 6 DOF or 4 DOF implemented in
+  @ref cv::detail::AffineBestOf2NearestMatcher cv::detail::AffineBasedEstimator
+  cv::detail::BundleAdjusterAffine cv::detail::BundleAdjusterAffinePartial cv::AffineWarper
+
+Homography model is useful for creating photo panoramas captured by camera,
+while affine-based model can be used to stitch scans and object captured by
+specialized devices. Use @ref cv::Stitcher::create to get preconfigured pipeline for one
+of those models.
+
+@note
+Certain detailed settings of @ref cv::Stitcher might not make sense. Especially
+you should not mix classes implementing affine model and classes implementing
+Homography model, as they work with different transformations.
+
+@{
+    @defgroup stitching_match Features Finding and Images Matching
+    @defgroup stitching_rotation Rotation Estimation
+    @defgroup stitching_autocalib Autocalibration
+    @defgroup stitching_warp Images Warping
+    @defgroup stitching_seam Seam Estimation
+    @defgroup stitching_exposure Exposure Compensation
+    @defgroup stitching_blend Image Blenders
+@}
+  */
+
 namespace cv {
 
-class CV_EXPORTS Stitcher
+//! @addtogroup stitching
+//! @{
+
+/** @brief High level image stitcher.
+
+It's possible to use this class without being aware of the entire stitching pipeline. However, to
+be able to achieve higher stitching stability and quality of the final images at least being
+familiar with the theory is recommended.
+
+@note
+   -   A basic example on image stitching can be found at
+        opencv_source_code/samples/cpp/stitching.cpp
+    -   A detailed example on image stitching can be found at
+        opencv_source_code/samples/cpp/stitching_detailed.cpp
+ */
+class CV_EXPORTS_W Stitcher
 {
 public:
     enum { ORIG_RESOL = -1 };
@@ -66,24 +132,54 @@ public:
         ERR_HOMOGRAPHY_EST_FAIL = 2,
         ERR_CAMERA_PARAMS_ADJUST_FAIL = 3
     };
+    enum Mode
+    {
+        /** Mode for creating photo panoramas. Expects images under perspective
+        transformation and projects resulting pano to sphere.
 
-    // Creates stitcher with default parameters
+        @sa detail::BestOf2NearestMatcher SphericalWarper
+        */
+        PANORAMA = 0,
+        /** Mode for composing scans. Expects images under affine transformation does
+        not compensate exposure by default.
+
+        @sa detail::AffineBestOf2NearestMatcher AffineWarper
+        */
+        SCANS = 1,
+
+    };
+
+   // Stitcher() {}
+    /** @brief Creates a stitcher with the default parameters.
+
+    @param try_use_gpu Flag indicating whether GPU should be used whenever it's possible.
+    @return Stitcher class instance.
+     */
     static Stitcher createDefault(bool try_use_gpu = false);
+    /** @brief Creates a Stitcher configured in one of the stitching modes.
 
-    double registrationResol() const { return registr_resol_; }
-    void setRegistrationResol(double resol_mpx) { registr_resol_ = resol_mpx; }
+    @param mode Scenario for stitcher operation. This is usually determined by source of images
+    to stitch and their transformation. Default parameters will be chosen for operation in given
+    scenario.
+    @param try_use_gpu Flag indicating whether GPU should be used whenever it's possible.
+    @return Stitcher class instance.
+     */
+    static Ptr<Stitcher> create(Mode mode = PANORAMA, bool try_use_gpu = false);
 
-    double seamEstimationResol() const { return seam_est_resol_; }
-    void setSeamEstimationResol(double resol_mpx) { seam_est_resol_ = resol_mpx; }
+    CV_WRAP double registrationResol() const { return registr_resol_; }
+    CV_WRAP void setRegistrationResol(double resol_mpx) { registr_resol_ = resol_mpx; }
 
-    double compositingResol() const { return compose_resol_; }
-    void setCompositingResol(double resol_mpx) { compose_resol_ = resol_mpx; }
+    CV_WRAP double seamEstimationResol() const { return seam_est_resol_; }
+    CV_WRAP void setSeamEstimationResol(double resol_mpx) { seam_est_resol_ = resol_mpx; }
 
-    double panoConfidenceThresh() const { return conf_thresh_; }
-    void setPanoConfidenceThresh(double conf_thresh) { conf_thresh_ = conf_thresh; }
+    CV_WRAP double compositingResol() const { return compose_resol_; }
+    CV_WRAP void setCompositingResol(double resol_mpx) { compose_resol_ = resol_mpx; }
 
-    bool waveCorrection() const { return do_wave_correct_; }
-    void setWaveCorrection(bool flag) { do_wave_correct_ = flag; }
+    CV_WRAP double panoConfidenceThresh() const { return conf_thresh_; }
+    CV_WRAP void setPanoConfidenceThresh(double conf_thresh) { conf_thresh_ = conf_thresh; }
+
+    CV_WRAP bool waveCorrection() const { return do_wave_correct_; }
+    CV_WRAP void setWaveCorrection(bool flag) { do_wave_correct_ = flag; }
 
     detail::WaveCorrectKind waveCorrectKind() const { return wave_correct_kind_; }
     void setWaveCorrectKind(detail::WaveCorrectKind kind) { wave_correct_kind_ = kind; }
@@ -98,8 +194,8 @@ public:
     void setFeaturesMatcher(Ptr<detail::FeaturesMatcher> features_matcher)
         { features_matcher_ = features_matcher; }
 
-    const cv::Mat& matchingMask() const { return matching_mask_; }
-    void setMatchingMask(const cv::Mat &mask)
+    const cv::UMat& matchingMask() const { return matching_mask_; }
+    void setMatchingMask(const cv::UMat &mask)
     {
         CV_Assert(mask.type() == CV_8U && mask.cols == mask.rows);
         matching_mask_ = mask.clone();
@@ -109,6 +205,13 @@ public:
     const Ptr<detail::BundleAdjusterBase> bundleAdjuster() const { return bundle_adjuster_; }
     void setBundleAdjuster(Ptr<detail::BundleAdjusterBase> bundle_adjuster)
         { bundle_adjuster_ = bundle_adjuster; }
+
+    /* TODO OpenCV ABI 4.x
+    Ptr<detail::Estimator> estimator() { return estimator_; }
+    const Ptr<detail::Estimator> estimator() const { return estimator_; }
+    void setEstimator(Ptr<detail::Estimator> estimator)
+        { estimator_ = estimator; }
+    */
 
     Ptr<WarperCreator> warper() { return warper_; }
     const Ptr<WarperCreator> warper() const { return warper_; }
@@ -127,21 +230,51 @@ public:
     const Ptr<detail::Blender> blender() const { return blender_; }
     void setBlender(Ptr<detail::Blender> b) { blender_ = b; }
 
-    Status estimateTransform(InputArray images);
-    Status estimateTransform(InputArray images, const std::vector<std::vector<Rect> > &rois);
+    /** @overload */
+    CV_WRAP Status estimateTransform(InputArrayOfArrays images);
+    /** @brief These functions try to match the given images and to estimate rotations of each camera.
 
-    Status composePanorama(OutputArray pano);
-    Status composePanorama(InputArray images, OutputArray pano);
+    @note Use the functions only if you're aware of the stitching pipeline, otherwise use
+    Stitcher::stitch.
 
-    Status stitch(InputArray images, OutputArray pano);
-    Status stitch(InputArray images, const std::vector<std::vector<Rect> > &rois, OutputArray pano);
+    @param images Input images.
+    @param rois Region of interest rectangles.
+    @return Status code.
+     */
+    Status estimateTransform(InputArrayOfArrays images, const std::vector<std::vector<Rect> > &rois);
+
+    /** @overload */
+    CV_WRAP Status composePanorama(OutputArray pano);
+    /** @brief These functions try to compose the given images (or images stored internally from the other function
+    calls) into the final pano under the assumption that the image transformations were estimated
+    before.
+
+    @note Use the functions only if you're aware of the stitching pipeline, otherwise use
+    Stitcher::stitch.
+
+    @param images Input images.
+    @param pano Final pano.
+    @return Status code.
+     */
+    Status composePanorama(InputArrayOfArrays images, OutputArray pano);
+
+    /** @overload */
+    CV_WRAP Status stitch(InputArrayOfArrays images, OutputArray pano);
+    /** @brief These functions try to stitch the given images.
+
+    @param images Input images.
+    @param rois Region of interest rectangles.
+    @param pano Final pano.
+    @return Status code.
+     */
+    Status stitch(InputArrayOfArrays images, const std::vector<std::vector<Rect> > &rois, OutputArray pano);
 
     std::vector<int> component() const { return indices_; }
     std::vector<detail::CameraParams> cameras() const { return cameras_; }
-    double workScale() const { return work_scale_; }
+    CV_WRAP double workScale() const { return work_scale_; }
 
 private:
-    Stitcher() {}
+    //Stitcher() {}
 
     Status matchImages();
     Status estimateCameraParams();
@@ -152,8 +285,11 @@ private:
     double conf_thresh_;
     Ptr<detail::FeaturesFinder> features_finder_;
     Ptr<detail::FeaturesMatcher> features_matcher_;
-    cv::Mat matching_mask_;
+    cv::UMat matching_mask_;
     Ptr<detail::BundleAdjusterBase> bundle_adjuster_;
+    /* TODO OpenCV ABI 4.x
+    Ptr<detail::Estimator> estimator_;
+    */
     bool do_wave_correct_;
     detail::WaveCorrectKind wave_correct_kind_;
     Ptr<WarperCreator> warper_;
@@ -161,12 +297,12 @@ private:
     Ptr<detail::SeamFinder> seam_finder_;
     Ptr<detail::Blender> blender_;
 
-    std::vector<cv::Mat> imgs_;
+    std::vector<cv::UMat> imgs_;
     std::vector<std::vector<cv::Rect> > rois_;
     std::vector<cv::Size> full_img_sizes_;
     std::vector<detail::ImageFeatures> features_;
     std::vector<detail::MatchesInfo> pairwise_matches_;
-    std::vector<cv::Mat> seam_est_imgs_;
+    std::vector<cv::UMat> seam_est_imgs_;
     std::vector<int> indices_;
     std::vector<detail::CameraParams> cameras_;
     double work_scale_;
@@ -175,6 +311,11 @@ private:
     double warped_image_scale_;
 };
 
+CV_EXPORTS_W Ptr<Stitcher> createStitcher(bool try_use_gpu = false);
+CV_EXPORTS_W Ptr<Stitcher> createStitcherScans(bool try_use_gpu = false);
+
+//! @} stitching
+
 } // namespace cv
 
-#endif // __OPENCV_STITCHING_STITCHER_HPP__
+#endif // OPENCV_STITCHING_STITCHER_HPP

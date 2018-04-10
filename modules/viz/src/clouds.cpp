@@ -50,16 +50,36 @@
 
 cv::viz::WCloud::WCloud(InputArray cloud, InputArray colors)
 {
+    WCloud cloud_widget(cloud, colors, cv::noArray());
+    *this = cloud_widget;
+}
+
+cv::viz::WCloud::WCloud(InputArray cloud, const Color &color)
+{
+    WCloud cloud_widget(cloud, Mat(cloud.size(), CV_8UC3, color));
+    *this = cloud_widget;
+}
+
+cv::viz::WCloud::WCloud(InputArray cloud, const Color &color, InputArray normals)
+{
+    WCloud cloud_widget(cloud, Mat(cloud.size(), CV_8UC3, color), normals);
+    *this = cloud_widget;
+}
+
+cv::viz::WCloud::WCloud(cv::InputArray cloud, cv::InputArray colors, cv::InputArray normals)
+{
     CV_Assert(!cloud.empty() && !colors.empty());
 
     vtkSmartPointer<vtkCloudMatSource> cloud_source = vtkSmartPointer<vtkCloudMatSource>::New();
-    cloud_source->SetColorCloud(cloud, colors);
+    cloud_source->SetColorCloudNormals(cloud, colors, normals);
     cloud_source->Update();
 
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     VtkUtils::SetInputData(mapper, cloud_source->GetOutput());
     mapper->SetScalarModeToUsePointData();
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->SetScalarRange(0, 255);
     mapper->ScalarVisibilityOn();
 
@@ -70,13 +90,6 @@ cv::viz::WCloud::WCloud(InputArray cloud, InputArray colors)
 
     WidgetAccessor::setProp(*this, actor);
 }
-
-cv::viz::WCloud::WCloud(InputArray cloud, const Color &color)
-{
-    WCloud cloud_widget(cloud, Mat(cloud.size(), CV_8UC3, color));
-    *this = cloud_widget;
-}
-
 
 template<> cv::viz::WCloud cv::viz::Widget::cast<cv::viz::WCloud>()
 {
@@ -104,7 +117,9 @@ cv::viz::WPaintedCloud::WPaintedCloud(InputArray cloud)
 
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     VtkUtils::SetInputData(mapper, vtkPolyData::SafeDownCast(elevation->GetOutput()));
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->ScalarVisibilityOn();
     mapper->SetColorModeToMapScalars();
 
@@ -130,7 +145,9 @@ cv::viz::WPaintedCloud::WPaintedCloud(InputArray cloud, const Point3d& p1, const
 
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     VtkUtils::SetInputData(mapper, vtkPolyData::SafeDownCast(elevation->GetOutput()));
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->ScalarVisibilityOn();
     mapper->SetColorModeToMapScalars();
 
@@ -169,7 +186,9 @@ cv::viz::WPaintedCloud::WPaintedCloud(InputArray cloud, const Point3d& p1, const
 
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     VtkUtils::SetInputData(mapper, vtkPolyData::SafeDownCast(elevation->GetOutput()));
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->ScalarVisibilityOn();
     mapper->SetColorModeToMapScalars();
     mapper->SetLookupTable(color_transfer);
@@ -198,7 +217,9 @@ cv::viz::WCloudCollection::WCloudCollection()
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper->SetInputConnection(append_filter->GetOutputPort());
     mapper->SetScalarModeToUsePointData();
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->SetScalarRange(0, 255);
     mapper->ScalarVisibilityOn();
 
@@ -403,7 +424,9 @@ cv::viz::WMesh::WMesh(const Mesh &mesh)
 
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper->SetScalarModeToUsePointData();
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     VtkUtils::SetInputData(mapper, polydata);
 
     vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
@@ -455,7 +478,9 @@ cv::viz::WWidgetMerger::WWidgetMerger()
     vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper->SetInputConnection(append_filter->GetOutputPort());
     mapper->SetScalarModeToUsePointData();
+#if VTK_MAJOR_VERSION < 8
     mapper->ImmediateModeRenderingOff();
+#endif
     mapper->SetScalarRange(0, 255);
     mapper->ScalarVisibilityOn();
 

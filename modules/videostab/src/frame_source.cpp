@@ -45,8 +45,8 @@
 #include "opencv2/videostab/ring_buffer.hpp"
 
 #include "opencv2/opencv_modules.hpp"
-#ifdef HAVE_OPENCV_HIGHGUI
-#  include "opencv2/highgui.hpp"
+#ifdef HAVE_OPENCV_VIDEOIO
+#  include "opencv2/videoio.hpp"
 #endif
 
 namespace cv
@@ -62,28 +62,28 @@ public:
     VideoFileSourceImpl(const String &path, bool volatileFrame)
         : path_(path), volatileFrame_(volatileFrame) { reset(); }
 
-    virtual void reset()
+    virtual void reset() CV_OVERRIDE
     {
-#ifdef HAVE_OPENCV_HIGHGUI
+#ifdef HAVE_OPENCV_VIDEOIO
         vc.release();
         vc.open(path_);
         if (!vc.isOpened())
             CV_Error(0, "can't open file: " + path_);
 #else
-        CV_Error(CV_StsNotImplemented, "OpenCV has been compiled without video I/O support");
+        CV_Error(Error::StsNotImplemented, "OpenCV has been compiled without video I/O support");
 #endif
     }
 
-    virtual Mat nextFrame()
+    virtual Mat nextFrame() CV_OVERRIDE
     {
         Mat frame;
-#ifdef HAVE_OPENCV_HIGHGUI
+#ifdef HAVE_OPENCV_VIDEOIO
         vc >> frame;
 #endif
         return volatileFrame_ ? frame : frame.clone();
     }
 
-#ifdef HAVE_OPENCV_HIGHGUI
+#ifdef HAVE_OPENCV_VIDEOIO
     int width() {return static_cast<int>(vc.get(CAP_PROP_FRAME_WIDTH));}
     int height() {return static_cast<int>(vc.get(CAP_PROP_FRAME_HEIGHT));}
     int count() {return static_cast<int>(vc.get(CAP_PROP_FRAME_COUNT));}
@@ -98,7 +98,7 @@ public:
 private:
     String path_;
     bool volatileFrame_;
-#ifdef HAVE_OPENCV_HIGHGUI
+#ifdef HAVE_OPENCV_VIDEOIO
     VideoCapture vc;
 #endif
 };

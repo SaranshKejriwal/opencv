@@ -6,6 +6,9 @@
 #include <stdexcept>
 #include <opencv2/core/ocl.hpp>
 #include <opencv2/core/utility.hpp>
+#include "opencv2/imgcodecs.hpp"
+#include <opencv2/video.hpp>
+#include <opencv2/videoio.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/objdetect.hpp>
 #include <opencv2/imgproc.hpp>
@@ -25,16 +28,6 @@ public:
     void workBegin();
     void workEnd();
     string workFps() const;
-    string message() const;
-
-
-// This function test if gpu_rst matches cpu_rst.
-// If the two vectors are not equal, it will return the difference in vector size
-// Else if will return
-// (total diff of each cpu and gpu rects covered pixels)/(total cpu rects covered pixels)
-    double checkRectSimilarity(Size sz,
-                               std::vector<Rect>& cpu_rst,
-                               std::vector<Rect>& gpu_rst);
 private:
     App operator=(App&);
 
@@ -65,18 +58,16 @@ private:
 int main(int argc, char** argv)
 {
     const char* keys =
-        "{ h help      | false          | print help message }"
+        "{ h help      |                | print help message }"
         "{ i input     |                | specify input image}"
         "{ c camera    | -1             | enable camera capturing }"
-        "{ v video     | 768x576.avi    | use video as input }"
-        "{ g gray      | false          | convert image to gray one or not}"
+        "{ v video     | ../data/vtest.avi | use video as input }"
+        "{ g gray      |                | convert image to gray one or not}"
         "{ s scale     | 1.0            | resize the image before detect}"
         "{ o output    |                | specify output path when input is images}";
     CommandLineParser cmd(argc, argv, keys);
     if (cmd.has("help"))
     {
-        cout << "Usage : hog [options]" << endl;
-        cout << "Available options:" << endl;
         cmd.printMessage();
         return EXIT_SUCCESS;
     }
@@ -200,7 +191,7 @@ void App::run()
             if (abs(scale-1.0)>0.001)
             {
                 Size sz((int)((double)img_aux.cols/resize_scale), (int)((double)img_aux.rows/resize_scale));
-                resize(img_aux, img, sz);
+                resize(img_aux, img, sz, 0, 0, INTER_LINEAR_EXACT);
             }
             else img = img_aux;
             img.copyTo(img_to_show);
@@ -210,7 +201,7 @@ void App::run()
             // Perform HOG classification
             hogWorkBegin();
 
-            hog.detectMultiScale(img.getMat(ACCESS_READ), found, hit_threshold, win_stride,
+            hog.detectMultiScale(img, found, hit_threshold, win_stride,
                     Size(0, 0), scale, gr_threshold);
             hogWorkEnd();
 
@@ -222,7 +213,7 @@ void App::run()
                 rectangle(img_to_show, r.tl(), r.br(), Scalar(0, 255, 0), 3);
             }
 
-            putText(img_to_show, "Mode: CPU", Point(5, 25), FONT_HERSHEY_SIMPLEX, 1., Scalar(255, 100, 0), 2);
+            putText(img_to_show, ocl::useOpenCL() ? "Mode: OpenCL"  : "Mode: CPU", Point(5, 25), FONT_HERSHEY_SIMPLEX, 1., Scalar(255, 100, 0), 2);
             putText(img_to_show, "FPS (HOG only): " + hogWorkFps(), Point(5, 65), FONT_HERSHEY_SIMPLEX, 1., Scalar(255, 100, 0), 2);
             putText(img_to_show, "FPS (total): " + workFps(), Point(5, 105), FONT_HERSHEY_SIMPLEX, 1., Scalar(255, 100, 0), 2);
             imshow("opencv_hog", img_to_show);
@@ -232,7 +223,7 @@ void App::run()
 
             if (output!="" && write_once)
             {
-                if (img_source!="")     // wirte image
+                if (img_source!="")     // write image
                 {
                     write_once = false;
                     imwrite(output, img_to_show);

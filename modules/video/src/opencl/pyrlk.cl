@@ -45,11 +45,18 @@
 //
 //M*/
 
-#define	BUFFER	64
-#define	BUFFER2	BUFFER>>1
+#define GRIDSIZE    3
+#define LSx 8
+#define LSy 8
+// defeine local memory sizes
+#define LM_W (LSx*GRIDSIZE+2)
+#define LM_H (LSy*GRIDSIZE+2)
+#define BUFFER  (LSx*LSy)
+#define BUFFER2 BUFFER>>1
 #ifndef WAVE_SIZE
 #define WAVE_SIZE 1
 #endif
+
 #ifdef CPU
 
 inline void reduce3(float val1, float val2, float val3,  __local float* smem1,  __local float* smem2,  __local float* smem3, int tid)
@@ -128,24 +135,21 @@ inline void reduce3(float val1, float val2, float val3,
 #if WAVE_SIZE <16
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (tid < 8)
+    if (tid<1)
     {
 #endif
-        smem1[tid] += smem1[tid + 8];
-        smem2[tid] += smem2[tid + 8];
-        smem3[tid] += smem3[tid + 8];
-
-        smem1[tid] += smem1[tid + 4];
-        smem2[tid] += smem2[tid + 4];
-        smem3[tid] += smem3[tid + 4];
-
-        smem1[tid] += smem1[tid + 2];
-        smem2[tid] += smem2[tid + 2];
-        smem3[tid] += smem3[tid + 2];
-
-        smem1[tid] += smem1[tid + 1];
-        smem2[tid] += smem2[tid + 1];
-        smem3[tid] += smem3[tid + 1];
+        local float8* m1 = (local float8*)smem1;
+        local float8* m2 = (local float8*)smem2;
+        local float8* m3 = (local float8*)smem3;
+        float8 t1 = m1[0]+m1[1];
+        float8 t2 = m2[0]+m2[1];
+        float8 t3 = m3[0]+m3[1];
+        float4 t14 = t1.lo + t1.hi;
+        float4 t24 = t2.lo + t2.hi;
+        float4 t34 = t3.lo + t3.hi;
+        smem1[0] = t14.x+t14.y+t14.z+t14.w;
+        smem2[0] = t24.x+t24.y+t24.z+t24.w;
+        smem3[0] = t34.x+t34.y+t34.z+t34.w;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 }
@@ -171,20 +175,17 @@ inline void reduce2(float val1, float val2, __local volatile float* smem1, __loc
 #if WAVE_SIZE <16
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (tid < 8)
+    if (tid<1)
     {
 #endif
-        smem1[tid] += smem1[tid + 8];
-        smem2[tid] += smem2[tid + 8];
-
-        smem1[tid] += smem1[tid + 4];
-        smem2[tid] += smem2[tid + 4];
-
-        smem1[tid] += smem1[tid + 2];
-        smem2[tid] += smem2[tid + 2];
-
-        smem1[tid] += smem1[tid + 1];
-        smem2[tid] += smem2[tid + 1];
+        local float8* m1 = (local float8*)smem1;
+        local float8* m2 = (local float8*)smem2;
+        float8 t1 = m1[0]+m1[1];
+        float8 t2 = m2[0]+m2[1];
+        float4 t14 = t1.lo + t1.hi;
+        float4 t24 = t2.lo + t2.hi;
+        smem1[0] = t14.x+t14.y+t14.z+t14.w;
+        smem2[0] = t24.x+t24.y+t24.z+t24.w;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 }
@@ -207,13 +208,13 @@ inline void reduce1(float val1, __local volatile float* smem1, int tid)
 #if WAVE_SIZE <16
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (tid < 8)
+    if (tid<1)
     {
 #endif
-        smem1[tid] += smem1[tid + 8];
-        smem1[tid] += smem1[tid + 4];
-        smem1[tid] += smem1[tid + 2];
-        smem1[tid] += smem1[tid + 1];
+        local float8* m1 = (local float8*)smem1;
+        float8 t1 = m1[0]+m1[1];
+        float4 t14 = t1.lo + t1.hi;
+        smem1[0] = t14.x+t14.y+t14.z+t14.w;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 }
@@ -225,44 +226,76 @@ inline void reduce1(float val1, __local volatile float* smem1, int tid)
 // Image read mode
 __constant sampler_t sampler    = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
 
-inline void SetPatch(image2d_t I, float x, float y,
+// macro to get pixel value from local memory
+
+#define VAL(_y,_x,_yy,_xx)    (IPatchLocal[mad24(((_y) + (_yy)), LM_W, ((_x) + (_xx)))])
+inline void SetPatch(local float* IPatchLocal, int TileY, int TileX,
               float* Pch, float* Dx, float* Dy,
-              float* A11, float* A12, float* A22)
+              float* A11, float* A12, float* A22, float w)
 {
-    *Pch = read_imagef(I, sampler, (float2)(x, y)).x;
+    int xid=get_local_id(0);
+    int yid=get_local_id(1);
+    int xBase = mad24(TileX, LSx, (xid + 1));
+    int yBase = mad24(TileY, LSy, (yid + 1));
 
-    float dIdx = 3.0f * read_imagef(I, sampler, (float2)(x + 1, y - 1)).x + 10.0f * read_imagef(I, sampler, (float2)(x + 1, y)).x + 3.0f * read_imagef(I, sampler, (float2)(x + 1, y + 1)).x -
-                 (3.0f * read_imagef(I, sampler, (float2)(x - 1, y - 1)).x + 10.0f * read_imagef(I, sampler, (float2)(x - 1, y)).x + 3.0f * read_imagef(I, sampler, (float2)(x - 1, y + 1)).x);
+    *Pch = VAL(yBase,xBase,0,0);
 
-    float dIdy = 3.0f * read_imagef(I, sampler, (float2)(x - 1, y + 1)).x + 10.0f * read_imagef(I, sampler, (float2)(x, y + 1)).x + 3.0f * read_imagef(I, sampler, (float2)(x + 1, y + 1)).x -
-                 (3.0f * read_imagef(I, sampler, (float2)(x - 1, y - 1)).x + 10.0f * read_imagef(I, sampler, (float2)(x, y - 1)).x + 3.0f * read_imagef(I, sampler, (float2)(x + 1, y - 1)).x);
+    *Dx = mad((VAL(yBase,xBase,-1,1) + VAL(yBase,xBase,+1,1) - VAL(yBase,xBase,-1,-1) - VAL(yBase,xBase,+1,-1)), 3.0f, (VAL(yBase,xBase,0,1) - VAL(yBase,xBase,0,-1)) * 10.0f) * w;
+    *Dy = mad((VAL(yBase,xBase,1,-1) + VAL(yBase,xBase,1,+1) - VAL(yBase,xBase,-1,-1) - VAL(yBase,xBase,-1,+1)), 3.0f, (VAL(yBase,xBase,1,0) - VAL(yBase,xBase,-1,0)) * 10.0f) * w;
 
-
-    *Dx = dIdx;
-    *Dy = dIdy;
-
-    *A11 += dIdx * dIdx;
-    *A12 += dIdx * dIdy;
-    *A22 += dIdy * dIdy;
+    *A11 = mad(*Dx, *Dx, *A11);
+    *A12 = mad(*Dx, *Dy, *A12);
+    *A22 = mad(*Dy, *Dy, *A22);
 }
+#undef VAL
 
 inline void GetPatch(image2d_t J, float x, float y,
               float* Pch, float* Dx, float* Dy,
               float* b1, float* b2)
 {
-    float J_val = read_imagef(J, sampler, (float2)(x, y)).x;
-    float diff = (J_val - *Pch) * 32.0f;
-    *b1 += diff**Dx;
-    *b2 += diff**Dy;
+    float diff = read_imagef(J, sampler, (float2)(x,y)).x-*Pch;
+    *b1 = mad(diff, *Dx, *b1);
+    *b2 = mad(diff, *Dy, *b2);
 }
 
-inline void GetError(image2d_t J, const float x, const float y, const float* Pch, float* errval)
+inline void GetError(image2d_t J, const float x, const float y, const float* Pch, float* errval, float w)
 {
-    float diff = read_imagef(J, sampler, (float2)(x,y)).x-*Pch;
+    float diff = ((((read_imagef(J, sampler, (float2)(x,y)).x * 16384) + 256) / 512) - (((*Pch * 16384) + 256) /512)) * w;
     *errval += fabs(diff);
 }
 
-#define	GRIDSIZE	3
+
+//macro to read pixel value into local memory.
+#define READI(_y,_x) IPatchLocal[mad24(mad24((_y), LSy, yid), LM_W, mad24((_x), LSx, xid))] = read_imagef(I, sampler, (float2)(mad((float)(_x), (float)LSx, Point.x + xid - 0.5f), mad((float)(_y), (float)LSy, Point.y + yid - 0.5f))).x;
+void ReadPatchIToLocalMem(image2d_t I, float2 Point, local float* IPatchLocal)
+{
+    int xid=get_local_id(0);
+    int yid=get_local_id(1);
+    //read (3*LSx)*(3*LSy) window. each macro call read LSx*LSy pixels block
+    READI(0,0);READI(0,1);READI(0,2);
+    READI(1,0);READI(1,1);READI(1,2);
+    READI(2,0);READI(2,1);READI(2,2);
+    if(xid<2)
+    {// read last 2 columns border. each macro call reads 2*LSy pixels block
+        READI(0,3);
+        READI(1,3);
+        READI(2,3);
+    }
+
+    if(yid<2)
+    {// read last 2 row. each macro call reads LSx*2 pixels block
+        READI(3,0);READI(3,1);READI(3,2);
+    }
+
+    if(yid<2 && xid<2)
+    {// read right bottom 2x2 corner. one macro call reads 2*2 pixels block
+        READI(3,3);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+}
+#undef READI
+
+__attribute__((reqd_work_group_size(LSx, LSy, 1)))
 __kernel void lkSparse(image2d_t I, image2d_t J,
                        __global const float2* prevPts, __global float2* nextPts, __global uchar* status, __global float* err,
                        const int level, const int rows, const int cols, int PATCH_X, int PATCH_Y, int c_winSize_x, int c_winSize_y, int c_iters, char calcErr)
@@ -271,12 +304,40 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
     __local float smem2[BUFFER];
     __local float smem3[BUFFER];
 
-    unsigned int xid=get_local_id(0);
-    unsigned int yid=get_local_id(1);
-    unsigned int gid=get_group_id(0);
-    unsigned int xsize=get_local_size(0);
-    unsigned int ysize=get_local_size(1);
-    int xBase, yBase, k;
+    int xid=get_local_id(0);
+    int yid=get_local_id(1);
+    int gid=get_group_id(0);
+    int xsize=get_local_size(0);
+    int ysize=get_local_size(1);
+    int k;
+
+#ifdef CPU
+    float wx0 = 1.0f;
+    float wy0 = 1.0f;
+    int xBase = mad24(xsize, 2, xid);
+    int yBase = mad24(ysize, 2, yid);
+    float wx1 = (xBase < c_winSize_x) ? 1 : 0;
+    float wy1 = (yBase < c_winSize_y) ? 1 : 0;
+#else
+#if WSX == 1
+    float wx0 = 1.0f;
+    int xBase = mad24(xsize, 2, xid);
+    float wx1 = (xBase < c_winSize_x) ? 1 : 0;
+#else
+    int xBase = mad24(xsize, 1, xid);
+    float wx0 = (xBase < c_winSize_x) ? 1 : 0;
+    float wx1 = 0.0f;
+#endif
+#if WSY == 1
+    float wy0 = 1.0f;
+    int yBase = mad24(ysize, 2, yid);
+    float wy1 = (yBase < c_winSize_y) ? 1 : 0;
+#else
+    int yBase = mad24(ysize, 1, yid);
+    float wy0 = (yBase < c_winSize_y) ? 1 : 0;
+    float wy1 = 0.0f;
+#endif
+#endif
 
     float2 c_halfWin = (float2)((c_winSize_x - 1)>>1, (c_winSize_y - 1)>>1);
 
@@ -305,64 +366,53 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
     float dIdx_patch[GRIDSIZE][GRIDSIZE];
     float dIdy_patch[GRIDSIZE][GRIDSIZE];
 
-    yBase=yid;
+    // local memory to read image with border to calc sobels
+    local float IPatchLocal[LM_W*LM_H];
+    ReadPatchIToLocalMem(I,prevPt,IPatchLocal);
+
     {
-        xBase=xid;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 0, 0,
                  &I_patch[0][0], &dIdx_patch[0][0], &dIdy_patch[0][0],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,1);
 
 
-        xBase+=xsize;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 0, 1,
                  &I_patch[0][1], &dIdx_patch[0][1], &dIdy_patch[0][1],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,wx0);
 
-        xBase+=xsize;
-        if(xBase<c_winSize_x)
-            SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[0][2], &dIdx_patch[0][2], &dIdy_patch[0][2],
-                     &A11, &A12, &A22);
+        SetPatch(IPatchLocal, 0, 2,
+                    &I_patch[0][2], &dIdx_patch[0][2], &dIdy_patch[0][2],
+                    &A11, &A12, &A22,wx1);
     }
-    yBase+=ysize;
     {
-        xBase=xid;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 1, 0,
                  &I_patch[1][0], &dIdx_patch[1][0], &dIdy_patch[1][0],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,wy0);
 
 
-        xBase+=xsize;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 1,1,
                  &I_patch[1][1], &dIdx_patch[1][1], &dIdy_patch[1][1],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,wx0*wy0);
 
-        xBase+=xsize;
-        if(xBase<c_winSize_x)
-            SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[1][2], &dIdx_patch[1][2], &dIdy_patch[1][2],
-                     &A11, &A12, &A22);
+        SetPatch(IPatchLocal, 1,2,
+                    &I_patch[1][2], &dIdx_patch[1][2], &dIdy_patch[1][2],
+                    &A11, &A12, &A22,wx1*wy0);
     }
-    yBase+=ysize;
-    if(yBase<c_winSize_y)
     {
-        xBase=xid;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 2,0,
                  &I_patch[2][0], &dIdx_patch[2][0], &dIdy_patch[2][0],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,wy1);
 
 
-        xBase+=xsize;
-        SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+        SetPatch(IPatchLocal, 2,1,
                  &I_patch[2][1], &dIdx_patch[2][1], &dIdy_patch[2][1],
-                 &A11, &A12, &A22);
+                 &A11, &A12, &A22,wx0*wy1);
 
-        xBase+=xsize;
-        if(xBase<c_winSize_x)
-            SetPatch(I, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[2][2], &dIdx_patch[2][2], &dIdy_patch[2][2],
-                     &A11, &A12, &A22);
+        SetPatch(IPatchLocal, 2,2,
+                    &I_patch[2][2], &dIdx_patch[2][2], &dIdy_patch[2][2],
+                    &A11, &A12, &A22,wx1*wy1);
     }
+
 
     reduce3(A11, A12, A22, smem1, smem2, smem3, tid);
 
@@ -371,7 +421,7 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
     A22 = smem3[0];
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    float D = A11 * A22 - A12 * A12;
+    float D = mad(A11, A22, - A12 * A12);
 
     if (D < 1.192092896e-07f)
     {
@@ -385,7 +435,13 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
     A12 /= D;
     A22 /= D;
 
-    prevPt = nextPts[gid] * 2.0f - c_halfWin;
+    prevPt = mad(nextPts[gid], 2.0f, - c_halfWin);
+
+    float2 offset0 = (float2)(xid + 0.5f, yid + 0.5f);
+    float2 offset1 = (float2)(xsize, ysize);
+    float2 loc0 = prevPt + offset0;
+    float2 loc1 = loc0 + offset1;
+    float2 loc2 = loc1 + offset1;
 
     for (k = 0; k < c_iters; ++k)
     {
@@ -398,63 +454,47 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
         float b1 = 0;
         float b2 = 0;
 
-        yBase=yid;
         {
-            xBase=xid;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc0.x, loc0.y,
                      &I_patch[0][0], &dIdx_patch[0][0], &dIdy_patch[0][0],
                      &b1, &b2);
 
 
-            xBase+=xsize;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc1.x, loc0.y,
                      &I_patch[0][1], &dIdx_patch[0][1], &dIdy_patch[0][1],
                      &b1, &b2);
 
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[0][2], &dIdx_patch[0][2], &dIdy_patch[0][2],
-                         &b1, &b2);
+            GetPatch(J, loc2.x, loc0.y,
+                        &I_patch[0][2], &dIdx_patch[0][2], &dIdy_patch[0][2],
+                        &b1, &b2);
         }
-        yBase+=ysize;
         {
-            xBase=xid;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc0.x, loc1.y,
                      &I_patch[1][0], &dIdx_patch[1][0], &dIdy_patch[1][0],
                      &b1, &b2);
 
 
-            xBase+=xsize;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc1.x, loc1.y,
                      &I_patch[1][1], &dIdx_patch[1][1], &dIdy_patch[1][1],
                      &b1, &b2);
 
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[1][2], &dIdx_patch[1][2], &dIdy_patch[1][2],
-                         &b1, &b2);
+            GetPatch(J, loc2.x, loc1.y,
+                        &I_patch[1][2], &dIdx_patch[1][2], &dIdy_patch[1][2],
+                        &b1, &b2);
         }
-        yBase+=ysize;
-        if(yBase<c_winSize_y)
         {
-            xBase=xid;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc0.x, loc2.y,
                      &I_patch[2][0], &dIdx_patch[2][0], &dIdy_patch[2][0],
                      &b1, &b2);
 
 
-            xBase+=xsize;
-            GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
+            GetPatch(J, loc1.x, loc2.y,
                      &I_patch[2][1], &dIdx_patch[2][1], &dIdy_patch[2][1],
                      &b1, &b2);
 
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetPatch(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[2][2], &dIdx_patch[2][2], &dIdy_patch[2][2],
-                         &b1, &b2);
+            GetPatch(J, loc2.x, loc2.y,
+                        &I_patch[2][2], &dIdx_patch[2][2], &dIdy_patch[2][2],
+                        &b1, &b2);
         }
 
         reduce2(b1, b2, smem1, smem2, tid);
@@ -464,10 +504,13 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
         barrier(CLK_LOCAL_MEM_FENCE);
 
         float2 delta;
-        delta.x = A12 * b2 - A22 * b1;
-        delta.y = A12 * b1 - A11 * b2;
+        delta.x = mad(A12, b2, - A22 * b1) * 32.0f;
+        delta.y = mad(A12, b1, - A11 * b2) * 32.0f;
 
         prevPt += delta;
+        loc0 += delta;
+        loc1 += delta;
+        loc2 += delta;
 
         if (fabs(delta.x) < THRESHOLD && fabs(delta.y) < THRESHOLD)
             break;
@@ -476,54 +519,25 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
     D = 0.0f;
     if (calcErr)
     {
-        yBase=yid;
         {
-            xBase=xid;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[0][0], &D);
-
-
-            xBase+=xsize;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[0][1], &D);
-
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[0][2], &D);
+            GetError(J, loc0.x, loc0.y, &I_patch[0][0], &D, 1);
+            GetError(J, loc1.x, loc0.y, &I_patch[0][1], &D, wx0);
         }
-        yBase+=ysize;
         {
-            xBase=xid;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[1][0], &D);
-
-
-            xBase+=xsize;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[1][1], &D);
-
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[1][2], &D);
+            GetError(J, loc0.x, loc1.y, &I_patch[1][0], &D, wy0);
+            GetError(J, loc1.x, loc1.y, &I_patch[1][1], &D, wx0*wy0);
         }
-        yBase+=ysize;
-        if(yBase<c_winSize_y)
+        if(xBase < c_winSize_x)
         {
-            xBase=xid;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[2][0], &D);
-
-
-            xBase+=xsize;
-            GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                     &I_patch[2][1], &D);
-
-            xBase+=xsize;
-            if(xBase<c_winSize_x)
-                GetError(J, prevPt.x + xBase + 0.5f, prevPt.y + yBase + 0.5f,
-                         &I_patch[2][2], &D);
+            GetError(J, loc2.x, loc0.y, &I_patch[0][2], &D, wx1);
+            GetError(J, loc2.x, loc1.y, &I_patch[1][2], &D, wx1*wy0);
+        }
+        if(yBase < c_winSize_y)
+        {
+            GetError(J, loc0.x, loc2.y, &I_patch[2][0], &D, wy1);
+            GetError(J, loc1.x, loc2.y, &I_patch[2][1], &D, wx0*wy1);
+            if(xBase < c_winSize_x)
+                GetError(J, loc2.x, loc2.y, &I_patch[2][2], &D, wx1*wy1);
         }
 
         reduce1(D, smem1, tid);
@@ -536,6 +550,6 @@ __kernel void lkSparse(image2d_t I, image2d_t J,
         nextPts[gid] = prevPt;
 
         if (calcErr)
-            err[gid] = smem1[0] / (float)(c_winSize_x * c_winSize_y);
+            err[gid] = smem1[0] / (float)(32 * c_winSize_x * c_winSize_y);
     }
 }

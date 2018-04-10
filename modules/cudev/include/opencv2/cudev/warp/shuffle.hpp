@@ -43,18 +43,27 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_WARP_SHUFFLE_HPP__
-#define __OPENCV_CUDEV_WARP_SHUFFLE_HPP__
+#ifndef OPENCV_CUDEV_WARP_SHUFFLE_HPP
+#define OPENCV_CUDEV_WARP_SHUFFLE_HPP
 
 #include "../common.hpp"
 #include "../util/vec_traits.hpp"
 
 namespace cv { namespace cudev {
 
+//! @addtogroup cudev
+//! @{
+
 #if CV_CUDEV_ARCH >= 300
 
-// shfl
+#if __CUDACC_VER_MAJOR__ >= 9
+#  define __shfl(x, y, z) __shfl_sync(0xFFFFFFFFU, x, y, z)
+#  define __shfl_xor(x, y, z) __shfl_xor_sync(0xFFFFFFFFU, x, y, z)
+#  define __shfl_up(x, y, z) __shfl_up_sync(0xFFFFFFFFU, x, y, z)
+#  define __shfl_down(x, y, z) __shfl_down_sync(0xFFFFFFFFU, x, y, z)
+#endif
 
+// shfl
 __device__ __forceinline__ uchar shfl(uchar val, int srcLane, int width = warpSize)
 {
     return (uchar) __shfl((int) val, srcLane, width);
@@ -416,8 +425,14 @@ CV_CUDEV_SHFL_XOR_VEC_INST(float)
 CV_CUDEV_SHFL_XOR_VEC_INST(double)
 
 #undef CV_CUDEV_SHFL_XOR_VEC_INST
+#undef __shfl
+#undef __shfl_xor
+#undef __shfl_up
+#undef __shfl_down
 
 #endif // CV_CUDEV_ARCH >= 300
+
+//! @}
 
 }}
 

@@ -43,8 +43,8 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_GRID_INTEGRAL_DETAIL_HPP__
-#define __OPENCV_CUDEV_GRID_INTEGRAL_DETAIL_HPP__
+#ifndef OPENCV_CUDEV_GRID_INTEGRAL_DETAIL_HPP
+#define OPENCV_CUDEV_GRID_INTEGRAL_DETAIL_HPP
 
 #include "../../common.hpp"
 #include "../../warp/shuffle.hpp"
@@ -439,8 +439,6 @@ namespace integral_detail
 
             T sum = (tidx < cols) && (y < rows) ? *p : 0;
 
-            y += blockDim.y;
-
             sums[threadIdx.x][threadIdx.y] = sum;
             __syncthreads();
 
@@ -467,14 +465,17 @@ namespace integral_detail
             if (threadIdx.y > 0)
                 sum += sums[threadIdx.x][threadIdx.y - 1];
 
-            if (tidx < cols)
+            sum += stepSum;
+            stepSum += sums[threadIdx.x][blockDim.y - 1];
+
+            __syncthreads();
+
+            if ((tidx < cols) && (y < rows))
             {
-                sum += stepSum;
-                stepSum += sums[threadIdx.x][blockDim.y - 1];
                 *p = sum;
             }
 
-            __syncthreads();
+            y += blockDim.y;
         }
     #else
         __shared__ T smem[32][32];
@@ -597,7 +598,7 @@ namespace integral_detail
     __host__ static void integral(const GlobPtr<uchar>& src, const GlobPtr<uint>& dst, int rows, int cols, cudaStream_t stream)
     {
         if (deviceSupports(FEATURE_SET_COMPUTE_30)
-            && (cols % 16 == 0)
+            && (cols % 64 == 0)
             && reinterpret_cast<intptr_t>(src.data) % 32 == 0
             && reinterpret_cast<intptr_t>(dst.data) % 32 == 0)
         {

@@ -41,10 +41,8 @@
 //M*/
 
 #include "test_precomp.hpp"
-#include <string>
 
-using namespace std;
-using namespace cv;
+namespace opencv_test { namespace {
 
 class CV_InpaintTest : public cvtest::BaseTest
 {
@@ -91,8 +89,8 @@ void CV_InpaintTest::run( int )
     absdiff( orig, res1, diff1 );
     absdiff( orig, res2, diff2 );
 
-    double n1 = norm(diff1.reshape(1), NORM_INF, inv_mask.reshape(1));
-    double n2 = norm(diff2.reshape(1), NORM_INF, inv_mask.reshape(1));
+    double n1 = cvtest::norm(diff1.reshape(1), NORM_INF, inv_mask.reshape(1));
+    double n2 = cvtest::norm(diff2.reshape(1), NORM_INF, inv_mask.reshape(1));
 
     if (n1 != 0 || n2 != 0)
     {
@@ -103,8 +101,8 @@ void CV_InpaintTest::run( int )
     absdiff( exp1, res1, diff1 );
     absdiff( exp2, res2, diff2 );
 
-    n1 = norm(diff1.reshape(1), NORM_INF, mask.reshape(1));
-    n2 = norm(diff2.reshape(1), NORM_INF, mask.reshape(1));
+    n1 = cvtest::norm(diff1.reshape(1), NORM_INF, mask.reshape(1));
+    n2 = cvtest::norm(diff2.reshape(1), NORM_INF, mask.reshape(1));
 
     const int jpeg_thres = 3;
     if (n1 > jpeg_thres || n2 > jpeg_thres)
@@ -117,3 +115,28 @@ void CV_InpaintTest::run( int )
 }
 
 TEST(Photo_Inpaint, regression) { CV_InpaintTest test; test.safe_run(); }
+
+typedef testing::TestWithParam<tuple<int> > formats;
+
+TEST_P(formats, 1c)
+{
+    const int type = get<0>(GetParam());
+    Mat src(100, 100, type);
+    src.setTo(Scalar::all(128));
+    Mat ref = src.clone();
+    Mat dst, mask = Mat::zeros(src.size(), CV_8U);
+
+    circle(src, Point(50, 50), 5, Scalar(200), 6);
+    circle(mask, Point(50, 50), 5, Scalar(200), 6);
+    inpaint(src, mask, dst, 10, INPAINT_NS);
+
+    Mat dst2;
+    inpaint(src, mask, dst2, 10, INPAINT_TELEA);
+
+    ASSERT_LE(cv::norm(dst, ref, NORM_INF), 3.);
+    ASSERT_LE(cv::norm(dst2, ref, NORM_INF), 3.);
+}
+
+INSTANTIATE_TEST_CASE_P(Photo_Inpaint, formats, testing::Values(CV_32F, CV_16U, CV_8U));
+
+}} // namespace
